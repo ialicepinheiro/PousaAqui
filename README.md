@@ -29,12 +29,3 @@ O **PousaAqui** é um aplicativo interativo construído em Python com **Streamli
 Antes de começar, você precisará ter instalado em sua máquina:
 - Python 3.9 ou superior.
 - Uma chave de API gratuita da **[SerpApi](https://serpapi.com/)**.
-
----
-
-## 🔧 Passo a Passo de Instalação
-
-### 1. Clone o repositório
-```bash
-git clone [https://github.com/SEU_USUARIO/NOME_DO_REPOSITORIO.git](https://github.com/SEU_USUARIO/NOME_DO_REPOSITORIO.git)
-cd NOME_DO_REPOSITORIO
