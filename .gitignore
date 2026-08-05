@@ -1,0 +1,33 @@
+# Ambientes Virtuais do Python
+venv/
+.venv/
+env/
+ENV/
+
+# Arquivos de cache e compilados do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Configurações do VS Code e do sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Chaves de API locais ou arquivos de variáveis de ambiente
+.env
+*.pem
+secrets.json
+
+# Gráficos gerados localmente
+grafico_precos.png
+
+# Pasta de testes
+testes/
+
+
+# Histórico de preços (para não subir seu histórico de dados local)
+*.csv
