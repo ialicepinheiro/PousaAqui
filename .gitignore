@@ -28,9 +28,14 @@ grafico_precos.png
 # Pasta de testes
 testes/
 
-
 # Histórico de preços
 *.csv
 
 # Arquivo SQLite
 pousaaqui.db
+
+# Banco de dados local (não deve subir pro GitHub)
+historico_voos.db
+
+# Script de rotina/testes
+rotina_monitoramento.py

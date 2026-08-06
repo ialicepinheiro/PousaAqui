@@ -1,31 +1,34 @@
 # ✈️ PousaAqui - Painel de Monitoramento de Passagens Aéreas
 
-O **PousaAqui** é um aplicativo interativo construído em Python com **Streamlit** que permite buscar, comparar e monitorar o histórico de preços de passagens aéreas usando a API do **Google Flights** (via SerpApi).
+O **PousaAqui** é uma aplicação web interativa desenvolvida com **Streamlit** para busca, monitoramento e análise de preços de voos. Ela consome dados em tempo real através da **SerpApi (Google Flights & Google Travel Explore)** e permite salvar o histórico das buscas em um banco de dados para analisar a variação e tendência de tarifas ao longo do tempo.
 
 ---
 
-## 🚀 Funcionalidades
+## ✨ Funcionalidades
 
-- 🔍 **Busca Dinâmica com Autocomplete:** Digite o nome de qualquer cidade ou aeroporto do mundo e receba sugestões automáticas.
-- ✈️ **Consulta ao Google Flights:** Obtém o menor preço, duração total, número de escalas e horário de saída/chegada do voo.
-- 🗓️ **Flexibilidade de Datas:** Suporte para pesquisas de Somente Ida ou Ida e Volta.
-- 📊 **Gráfico de Histórico de Preços:** Salve buscas de preços para visualizar a evolução dos valores ao longo do tempo em gráficos de linha.
-- 💾 **Armazenamento Local:** Registra as buscas monitoradas em um arquivo CSV (`historico_precos.csv`).
+- **🔍 Busca Inteligente & Autocomplete:**
+  - Digite qualquer nome de cidade ou código IATA de aeroporto com sugestões em tempo real (`google_flights_autocomplete`).
+  - Suporte a voos de ida e de ida e volta.
+- **⚡ Busca Multi-Fonte:**
+  - Consulta detalhada no **Google Flights** com identificação automática do voo mais barato e mais rápido.
+  - Varredura em ofertas promocionais (**Google Flights Deals**) e destinos (**Google Travel Explore**).
+- **📈 Gráficos e Análise Histórica:**
+  - Visualização gráfica da evolução dos preços das passagens pesquisadas usando **Plotly**.
+  - Indicadores de tendência (Preço Atual, Menor Preço Histórico e Maior Preço Histórico).
+- **💾 Gerenciamento de Histórico (CRUD):**
+  - Armazenamento dos voos salvos em banco de dados SQLite.
+  - Exclusão individual de registros salvos ou reset completo da base de dados.
+  - Exportação dos dados coletados em formato **CSV**.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
-- **[Python](https://www.python.org/)** - Linguagem principal do projeto.
-- **[Streamlit](https://streamlit.io/)** - Interface web interativa.
-- **[SerpApi](https://serpapi.com/)** - API para coleta de dados do Google Flights.
-- **[Pandas](https://pandas.pydata.org/)** & **[Matplotlib](https://matplotlib.org/)** - Manipulação de dados e geração do gráfico de histórico.
-- **[streamlit-searchbox](https://github.com/m-c-k-l/streamlit-searchbox)** - Componente de busca com autocomplete em tempo real.
+- **Linguagem:** Python 3.9+
+- **Interface Web:** [Streamlit](https://streamlit.io/)
+- **Visualização de Dados:** [Plotly Express](https://plotly.com/python/) & Pandas
+- **APIs de Voos:** [SerpApi](https://serpapi.com/) (Google Flights Engine)
+- **Banco de Dados:** SQLite3
+- **Controle de Variáveis de Ambiente:** `python-dotenv`
 
 ---
-
-## 📋 Pré-requisitos
-
-Antes de começar, você precisará ter instalado em sua máquina:
-- Python 3.9 ou superior.
-- Uma chave de API gratuita da **[SerpApi](https://serpapi.com/)**.
