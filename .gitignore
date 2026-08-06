@@ -29,5 +29,8 @@ grafico_precos.png
 testes/
 
 
-# Histórico de preços (para não subir seu histórico de dados local)
+# Histórico de preços
 *.csv
+
+# Arquivo SQLite
+pousaaqui.dbpousaaqui.db
