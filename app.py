@@ -1,162 +1,107 @@
 import os
-from datetime import date, datetime
-import matplotlib.pyplot as plt
+import sqlite3
+from datetime import datetime, date
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from dotenv import load_dotenv
-from serpapi import GoogleSearch
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, inspect, text
-from sqlalchemy.orm import declarative_base, sessionmaker
 from streamlit_searchbox import st_searchbox
+from serpapi import GoogleSearch
+from dotenv import load_dotenv
 
-# ==========================================
-# 1. CONFIGURAÇÕES E BANCO DE DADOS
-# ==========================================
+# Carrega variáveis de ambiente (.env)
 load_dotenv()
-SERPAPI_KEY = os.getenv("SERP_API_KEY") or os.getenv("SERPAPI_KEY")
-DATABASE_URL = "sqlite:///pousaaqui.db"
-
-engine = create_engine(DATABASE_URL, echo=False)
-Base = declarative_base()
-
-
-class HistoricoPreco(Base):
-    __tablename__ = "historico_precos"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    origem = Column(String(10), nullable=False)
-    destino = Column(String(10), nullable=False)
-    preco = Column(Float, nullable=False)
-    companhia = Column(String(100))
-
-    # Campos Adicionais
-    duracao = Column(Integer, nullable=True)
-    escalas = Column(Integer, nullable=True)
-    data_voo = Column(DateTime, nullable=True)
-
-    data_consulta = Column(DateTime, default=datetime.now)
-
-
-Base.metadata.create_all(engine)
-
-
-def atualizar_banco():
-    """Adiciona novas colunas à tabela historico_precos caso não existam."""
-    novas_colunas = {
-        "duracao": "INTEGER",
-        "escalas": "INTEGER",
-        "data_voo": "DATETIME",
-    }
-    
-    with engine.begin() as conexao:
-        colunas_existentes = {col["name"] for col in inspect(conexao).get_columns("historico_precos")}
-        
-        for nome, tipo in novas_colunas.items():
-            if nome not in colunas_existentes:
-                conexao.execute(text(f"ALTER TABLE historico_precos ADD COLUMN {nome} {tipo}"))
-
-
-atualizar_banco()
-SessionLocal = sessionmaker(bind=engine)
-
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+DB_NAME = "historico_voos.db"
 
 # ==========================================
-# 2. FUNÇÕES DO BANCO DE DADOS
+# 1. GERENCIAMENTO DO BANCO DE DADOS (SQLITE)
 # ==========================================
-def salvar_historico_db(origem, destino, preco, companhia, duracao=None, escalas=None, data_voo=None):
-    session = SessionLocal()
-    try:
-        data_voo_dt = None
-        if data_voo:
-            if isinstance(data_voo, date) and not isinstance(data_voo, datetime):
-                data_voo_dt = datetime.combine(data_voo, datetime.min.time())
-            elif isinstance(data_voo, datetime):
-                data_voo_dt = data_voo
+def init_db():
+    """Cria a tabela no SQLite se ainda não existir."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historico_voos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                origem TEXT NOT NULL,
+                destino TEXT NOT NULL,
+                preco REAL NOT NULL,
+                companhia TEXT,
+                duracao INTEGER,
+                escalas INTEGER,
+                data_voo TEXT,
+                data_consulta TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
 
-        registro = HistoricoPreco(
-            origem=origem,
-            destino=destino,
-            preco=preco,
-            companhia=companhia,
-            duracao=duracao,
-            escalas=escalas,
-            data_voo=data_voo_dt
-        )
-        session.add(registro)
-        session.commit()
-    except Exception as erro:
-        session.rollback()
-        st.error(f"Erro ao salvar no banco de dados: {erro}")
-    finally:
-        session.close()
-
+def salvar_historico_db(origem, destino, preco, companhia, duracao, escalas, data_voo):
+    """Insere um novo registro de voo pesquisado no banco de dados."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        data_voo_str = data_voo.strftime("%Y-%m-%d") if isinstance(data_voo, (date, datetime)) else str(data_voo)
+        cursor.execute("""
+            INSERT INTO historico_voos (origem, destino, preco, companhia, duracao, escalas, data_voo)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (origem, destino, preco, companhia, duracao, escalas, data_voo_str))
+        conn.commit()
 
 def carregar_historico_db():
-    session = SessionLocal()
-    try:
-        registros = session.query(HistoricoPreco).all()
-        return pd.DataFrame([{
-            "Data da Consulta": r.data_consulta.strftime("%d/%m/%Y %H:%M") if r.data_consulta else "N/A",
-            "Origem": r.origem,
-            "Destino": r.destino,
-            "Data do Voo": r.data_voo.strftime("%d/%m/%Y") if r.data_voo else "Não Informada",
-            "Preço (R$)": r.preco,
-            "Companhia": r.companhia,
-            "Duração (min)": r.duracao if r.duracao else "N/A",
-            "Escalas": r.escalas if r.escalas is not None else "N/A"
-        } for r in registros])
-    finally:
-        session.close()
+    """Recupera o histórico completo do banco de dados em formato DataFrame."""
+    init_db()
+    with sqlite3.connect(DB_NAME) as conn:
+        df = pd.read_sql_query("SELECT * FROM historico_voos ORDER BY data_consulta DESC", conn)
+    return df
 
+def deletar_registro_db(registro_id):
+    """Deleta um registro específico do histórico pelo ID."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM historico_voos WHERE id = ?", (registro_id,))
+        conn.commit()
+
+def limpar_todo_historico_db():
+    """Apaga todos os registros da tabela historico_voos."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM historico_voos")
+        conn.commit()
+
+# Inicializa a estrutura do banco ao iniciar o app
+init_db()
 
 # ==========================================
-# 3. COMPONENTES VISUAIS (GRÁFICOS)
+# 2. RENDERIZAÇÃO DE GRÁFICOS E MÉTRICAS
 # ==========================================
-def renderizar_grafico_evolucao(df_hist: pd.DataFrame):
-    """
-    Renderiza um gráfico de linha interativo mostrando o menor preço encontrado 
-    ao longo do tempo para uma rota e data de voo específica.
-    """
-    if df_hist.empty:
-        st.info("Nenhum dado cadastrado no histórico para gerar o gráfico.")
+def renderizar_grafico_evolucao(df):
+    """Gera o painel de métricas de tendência e o gráfico de linha Plotly."""
+    if df.empty:
+        st.info("📌 Nenhum histórico disponível para exibir o gráfico.")
         return
 
-    st.subheader("📈 Evolução de Preços da Rota")
+    # Formatação de colunas
+    df["Rota"] = df["origem"] + " ➔ " + df["destino"]
+    df["Data_Consulta_DT"] = pd.to_datetime(df["data_consulta"])
+    df["Preço (R$)"] = df["preco"]
 
-    # 1. Identifica combinações únicas de rotas e datas de voo no banco
-    df_hist["Rota"] = df_hist["Origem"] + " ➔ " + df_hist["Destino"]
-    rotas_disponiveis = df_hist["Rota"].unique().tolist()
+    rotas_disponiveis = df["Rota"].unique()
+    rota_selecionada = st.selectbox("Selecione a Rota:", rotas_disponiveis, key="select_rota_grafico")
 
-    col_rota, col_data_voo = st.columns(2)
-
-    with col_rota:
-        rota_selecionada = st.selectbox("Selecione a Rota", rotas_disponiveis, index=0)
-
-    df_rota = df_hist[df_hist["Rota"] == rota_selecionada]
-    datas_voo_disponiveis = df_rota["Data do Voo"].unique().tolist()
-
-    with col_data_voo:
-        data_voo_selecionada = st.selectbox("Selecione a Data do Voo", datas_voo_disponiveis, index=0)
-
-    # 2. Filtra os dados exatos para Rota + Data
-    df_filtrado = df_rota[df_rota["Data do Voo"] == data_voo_selecionada].copy()
-    df_filtrado["Data_Consulta_DT"] = pd.to_datetime(df_filtrado["Data da Consulta"], format="%d/%m/%Y %H:%M")
+    df_rota = df[df["Rota"] == rota_selecionada]
+    datas_voo_disponiveis = df_rota["data_voo"].dropna().unique()
     
-    # 3. Agrupa pelo MENOR PREÇO registrado naquela busca
-    df_grafico = (
-        df_filtrado.groupby("Data_Consulta_DT")["Preço (R$)"]
-        .min()
-        .reset_index()
-        .sort_values("Data_Consulta_DT")
-    )
+    if len(datas_voo_disponiveis) > 0:
+        data_voo_selecionada = st.selectbox("Selecione a Data do Voo:", datas_voo_disponiveis, key="select_data_grafico")
+        df_grafico = df_rota[df_rota["data_voo"] == data_voo_selecionada].sort_values("Data_Consulta_DT")
+    else:
+        df_grafico = df_rota.sort_values("Data_Consulta_DT")
+        data_voo_selecionada = "Não informada"
 
-    if len(df_grafico) < 2:
-        st.warning("⚠️ É necessário ter pelo menos **2 consultas em momentos diferentes** para esta mesma rota e data de voo para exibir a linha de tendência.")
-        st.dataframe(df_filtrado[["Origem", "Destino", "Data do Voo", "Preço (R$)", "Data da Consulta"]], use_container_width=True)
+    if df_grafico.empty:
+        st.warning("Sem dados suficientes para gerar o gráfico com estes filtros.")
         return
 
-    # 4. Métricas de Tendência
+    # Métricas de Tendência
     preco_inicial = df_grafico["Preço (R$)"].iloc[0]
     preco_atual = df_grafico["Preço (R$)"].iloc[-1]
     variacao = preco_atual - preco_inicial
@@ -167,7 +112,7 @@ def renderizar_grafico_evolucao(df_hist: pd.DataFrame):
     m2.metric("Menor Preço Histórico", f"R$ {df_grafico['Preço (R$)'].min():.2f}")
     m3.metric("Maior Preço Histórico", f"R$ {df_grafico['Preço (R$)'].max():.2f}")
 
-    # 5. Gráfico de Linha
+    # Gráfico de Linha Interativo
     fig = px.line(
         df_grafico,
         x="Data_Consulta_DT",
@@ -182,9 +127,8 @@ def renderizar_grafico_evolucao(df_hist: pd.DataFrame):
 
     st.plotly_chart(fig, use_container_width=True)
 
-
 # ==========================================
-# 4. CONFIGURAÇÃO E INTEGRAÇÃO SERPAPI
+# 3. CONFIGURAÇÃO E INTEGRAÇÃO SERPAPI
 # ==========================================
 st.set_page_config(page_title="PousaAqui - Painel de Monitoramento", page_icon="✈️", layout="wide")
 st.title("✈️ PousaAqui - Painel de Monitoramento")
@@ -477,9 +421,8 @@ def consultar_google_travel_explore(origem_query, destino_query, data_ida, data_
     except Exception:
         return None
 
-
 # ==========================================
-# 5. AUXILIAR DE INTERFACE (CARDS DE VOO)
+# 4. AUXILIAR DE INTERFACE (CARDS DE VOO)
 # ==========================================
 def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
     if not voo:
@@ -532,9 +475,8 @@ def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
         st.success("✅ Voo salvo no Banco de Dados!")
         st.rerun()
 
-
 # ==========================================
-# 6. INTERFACE DO USUÁRIO (LAYOUT PRINCIPAL)
+# 5. INTERFACE DO USUÁRIO (LAYOUT PRINCIPAL)
 # ==========================================
 col_esquerda, col_direita = st.columns([1.1, 0.9])
 
@@ -602,7 +544,7 @@ with col_direita:
     # Carrega os dados mais recentes do SQLite
     df_hist = carregar_historico_db()
 
-    tab_grafico, tab_tabela = st.tabs(["📈 Evolução de Preços", "📋 Tabela e Download"])
+    tab_grafico, tab_tabela = st.tabs(["📈 Evolução de Preços", "📋 Tabela e Gerenciamento"])
 
     with tab_grafico:
         renderizar_grafico_evolucao(df_hist)
@@ -611,13 +553,36 @@ with col_direita:
         if not df_hist.empty:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
             
-            # Botão para baixar relatório em CSV
-            st.download_button(
-                label="📥 Baixar Histórico (CSV)",
-                data=df_hist.to_csv(index=False).encode("utf-8"),
-                file_name=f"historico_pousaaqui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+            st.write("---")
+            col_down, col_del = st.columns([1, 1])
+            
+            with col_down:
+                st.download_button(
+                    label="📥 Baixar Histórico (CSV)",
+                    data=df_hist.to_csv(index=False).encode("utf-8"),
+                    file_name=f"historico_pousaaqui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            with col_del:
+                # Exclusão individual por ID
+                id_para_deletar = st.selectbox(
+                    "Selecione o ID para excluir:",
+                    options=df_hist["id"].tolist(),
+                    key="select_del_id"
+                )
+                if st.button("🗑️ Excluir Item Selecionado", type="secondary", use_container_width=True):
+                    deletar_registro_db(id_para_deletar)
+                    st.success(f"✅ Registro #{id_para_deletar} excluído!")
+                    st.rerun()
+
+            # Opção de reset completo
+            with st.expander("⚠️ Zona de Perigo"):
+                st.caption("A ação abaixo removerá todos os registros salvos permanentemente.")
+                if st.button("🚨 Apagar TODO o Histórico", type="primary"):
+                    limpar_todo_historico_db()
+                    st.success("✅ Todo o histórico foi zerado!")
+                    st.rerun()
         else:
             st.info("Nenhum registro no banco de dados até o momento.")

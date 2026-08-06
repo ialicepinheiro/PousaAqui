@@ -33,4 +33,4 @@ testes/
 *.csv
 
 # Arquivo SQLite
-pousaaqui.dbpousaaqui.db
+pousaaqui.db
