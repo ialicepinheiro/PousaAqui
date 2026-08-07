@@ -1,140 +1,67 @@
 import os
-import sqlite3
-from datetime import datetime, date
+from datetime import date, datetime
+import matplotlib.pyplot as plt
 import pandas as pd
-import plotly.express as px
 import streamlit as st
-from streamlit_searchbox import st_searchbox
-from serpapi import GoogleSearch
 from dotenv import load_dotenv
+from serpapi import GoogleSearch
+from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, inspect, text
+from sqlalchemy.orm import declarative_base, sessionmaker
+from streamlit_searchbox import st_searchbox
 
-# Carrega variáveis de ambiente (.env)
+# CONFIGURAÇÕES E BANCO DE DADOS
 load_dotenv()
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-DB_NAME = "historico_voos.db"
+SERPAPI_KEY = os.getenv("SERP_API_KEY") or os.getenv("SERPAPI_KEY")
+DATABASE_URL = "sqlite:///pousaaqui.db"
 
-# ==========================================
-# 1. GERENCIAMENTO DO BANCO DE DADOS (SQLITE)
-# ==========================================
-def init_db():
-    """Cria a tabela no SQLite se ainda não existir."""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS historico_voos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                origem TEXT NOT NULL,
-                destino TEXT NOT NULL,
-                preco REAL NOT NULL,
-                companhia TEXT,
-                duracao INTEGER,
-                escalas INTEGER,
-                data_voo TEXT,
-                data_consulta TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
+engine = create_engine(DATABASE_URL, echo=False)
+Base = declarative_base()
 
-def salvar_historico_db(origem, destino, preco, companhia, duracao, escalas, data_voo):
-    """Insere um novo registro de voo pesquisado no banco de dados."""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        data_voo_str = data_voo.strftime("%Y-%m-%d") if isinstance(data_voo, (date, datetime)) else str(data_voo)
-        cursor.execute("""
-            INSERT INTO historico_voos (origem, destino, preco, companhia, duracao, escalas, data_voo)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (origem, destino, preco, companhia, duracao, escalas, data_voo_str))
-        conn.commit()
 
-def carregar_historico_db():
-    """Recupera o histórico completo do banco de dados em formato DataFrame."""
-    init_db()
-    with sqlite3.connect(DB_NAME) as conn:
-        df = pd.read_sql_query("SELECT * FROM historico_voos ORDER BY data_consulta DESC", conn)
-    return df
+class HistoricoPreco(Base):
+    __tablename__ = "historico_precos"
 
-def deletar_registro_db(registro_id):
-    """Deleta um registro específico do histórico pelo ID."""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM historico_voos WHERE id = ?", (registro_id,))
-        conn.commit()
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    origem = Column(String(10), nullable=False)
+    destino = Column(String(10), nullable=False)
+    preco = Column(Float, nullable=False)
+    companhia = Column(String(100))
 
-def limpar_todo_historico_db():
-    """Apaga todos os registros da tabela historico_voos."""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM historico_voos")
-        conn.commit()
+    # Dados da passagem monitorada
+    duracao = Column(Integer, nullable=True)
+    escalas = Column(Integer, nullable=True)
+    data_voo = Column(DateTime, nullable=True)
 
-# Inicializa a estrutura do banco ao iniciar o app
-init_db()
+    data_consulta = Column(DateTime, default=datetime.now)
 
-# ==========================================
-# 2. RENDERIZAÇÃO DE GRÁFICOS E MÉTRICAS
-# ==========================================
-def renderizar_grafico_evolucao(df):
-    """Gera o painel de métricas de tendência e o gráfico de linha Plotly."""
-    if df.empty:
-        st.info("📌 Nenhum histórico disponível para exibir o gráfico.")
-        return
 
-    # Formatação de colunas
-    df["Rota"] = df["origem"] + " ➔ " + df["destino"]
-    df["Data_Consulta_DT"] = pd.to_datetime(df["data_consulta"])
-    df["Preço (R$)"] = df["preco"]
+Base.metadata.create_all(engine)
 
-    rotas_disponiveis = df["Rota"].unique()
-    rota_selecionada = st.selectbox("Selecione a Rota:", rotas_disponiveis, key="select_rota_grafico")
-
-    df_rota = df[df["Rota"] == rota_selecionada]
-    datas_voo_disponiveis = df_rota["data_voo"].dropna().unique()
+def atualizar_banco():
+    """Adiciona novas colunas à tabela historico_precos caso não existam."""
+    novas_colunas = {
+        "duracao": "INTEGER",
+        "escalas": "INTEGER",
+        "data_voo": "DATETIME",
+    }
     
-    if len(datas_voo_disponiveis) > 0:
-        data_voo_selecionada = st.selectbox("Selecione a Data do Voo:", datas_voo_disponiveis, key="select_data_grafico")
-        df_grafico = df_rota[df_rota["data_voo"] == data_voo_selecionada].sort_values("Data_Consulta_DT")
-    else:
-        df_grafico = df_rota.sort_values("Data_Consulta_DT")
-        data_voo_selecionada = "Não informada"
+    with engine.begin() as conexao:
+        colunas_existentes = {col["name"] for col in inspect(conexao).get_columns("historico_precos")}
+        
+        for nome, tipo in novas_colunas.items():
+            if nome not in colunas_existentes:
+                conexao.execute(text(f"ALTER TABLE historico_precos ADD COLUMN {nome} {tipo}"))
 
-    if df_grafico.empty:
-        st.warning("Sem dados suficientes para gerar o gráfico com estes filtros.")
-        return
+atualizar_banco()
+SessionLocal = sessionmaker(bind=engine)
 
-    # Métricas de Tendência
-    preco_inicial = df_grafico["Preço (R$)"].iloc[0]
-    preco_atual = df_grafico["Preço (R$)"].iloc[-1]
-    variacao = preco_atual - preco_inicial
-    percentual = (variacao / preco_inicial) * 100 if preco_inicial > 0 else 0
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Preço Atual (Última Busca)", f"R$ {preco_atual:.2f}", delta=f"{variacao:+.2f} ({percentual:+.1f}%)", delta_color="inverse")
-    m2.metric("Menor Preço Histórico", f"R$ {df_grafico['Preço (R$)'].min():.2f}")
-    m3.metric("Maior Preço Histórico", f"R$ {df_grafico['Preço (R$)'].max():.2f}")
-
-    # Gráfico de Linha Interativo
-    fig = px.line(
-        df_grafico,
-        x="Data_Consulta_DT",
-        y="Preço (R$)",
-        markers=True,
-        title=f"Histórico de Menor Preço: {rota_selecionada} (Voo em: {data_voo_selecionada})",
-        labels={"Data_Consulta_DT": "Data/Hora da Busca", "Preço (R$)": "Preço Mínimo (R$)"}
-    )
-
-    fig.update_traces(line_color="#1f77b4", line_width=3, marker_size=8)
-    fig.update_layout(hovermode="x unified", yaxis_tickprefix="R$ ")
-
-    st.plotly_chart(fig, use_container_width=True)
-
-# ==========================================
-# 3. CONFIGURAÇÃO E INTEGRAÇÃO SERPAPI
-# ==========================================
+# STREAMLIT CONFIG
 st.set_page_config(page_title="PousaAqui - Painel de Monitoramento", page_icon="✈️", layout="wide")
 st.title("✈️ PousaAqui - Painel de Monitoramento")
 st.write("Digite o nome ou código de qualquer cidade ou aeroporto!")
 
 
+# FUNÇÕES AUXILIARES
 def formatar_duracao(minutos):
     try:
         minutos = int(minutos)
@@ -144,6 +71,73 @@ def formatar_duracao(minutos):
     if horas and mins:
         return f"{horas}h {mins:02d}min"
     return f"{horas}h" if horas else f"{mins}min"
+
+
+def formatar_preco(valor):
+    """Formata valores monetários no padrão exibido pela aplicação."""
+    if valor is None or pd.isna(valor):
+        return "N/A"
+    return f"R$ {float(valor):,.0f}".replace(",", ".")
+
+
+def formatar_escalas(escalas):
+    """Transforma a quantidade de escalas em um texto amigável."""
+    if escalas is None or pd.isna(escalas):
+        return "N/A"
+
+    quantidade = int(escalas)
+    if quantidade == 0:
+        return "Sem escalas"
+    if quantidade == 1:
+        return "1 escala"
+    return f"{quantidade} escalas"
+
+
+def adicionar_preco_referencia(resultados, lista_precos):
+    """Adiciona à lista o menor preço indicado pela API, quando disponível."""
+    preco = resultados.get("price_insights", {}).get("lowest_price")
+    if preco is None:
+        return
+
+    try:
+        lista_precos.append(float(preco))
+    except (TypeError, ValueError):
+        pass
+
+
+def criar_dados_voo(
+    origem,
+    destino,
+    preco,
+    companhia,
+    duracao=0,
+    escalas=0,
+    saida="",
+    chegada="",
+    data_voo=None,
+    fonte=None,
+    preco_referencia_google=None,
+    quantidade_voos_analisados=0,
+    menores_por_busca=None,
+):
+    """Cria a estrutura padronizada usada pelos resultados de voo."""
+    dados = {
+        "origem": origem,
+        "destino": destino,
+        "preco": preco,
+        "companhia": companhia,
+        "saida": saida,
+        "chegada": chegada,
+        "duracao": duracao,
+        "escalas": escalas,
+        "data_voo": data_voo,
+        "preco_referencia_google": preco_referencia_google,
+        "quantidade_voos_analisados": quantidade_voos_analisados,
+        "menores_por_busca": menores_por_busca or [],
+    }
+    if fonte:
+        dados["fonte"] = fonte
+    return dados
 
 
 def _params_base(origem, data_ida, data_volta=None):
@@ -212,7 +206,7 @@ def buscar_locais(termo):
         return []
 
 
-def montar_dados_voo(voo, origem_query, destino_query, data_voo=None):
+def montar_dados_voo(voo, origem_query, destino_query):
     trechos = voo.get("flights", [])
     if not trechos:
         return None
@@ -221,17 +215,16 @@ def montar_dados_voo(voo, origem_query, destino_query, data_voo=None):
     chegada = trechos[-1].get("arrival_airport", {})
     companhias = list(dict.fromkeys(t.get("airline") for t in trechos if t.get("airline")))
 
-    return {
-        "origem": partida.get("id", origem_query),
-        "destino": chegada.get("id", destino_query),
-        "preco": voo["_preco"],
-        "companhia": ", ".join(companhias) or "N/A",
-        "saida": partida.get("time", ""),
-        "chegada": chegada.get("time", ""),
-        "duracao": voo.get("_duracao", 0),
-        "escalas": max(len(trechos) - 1, 0),
-        "data_voo": data_voo,
-    }
+    return criar_dados_voo(
+        origem=partida.get("id", origem_query),
+        destino=chegada.get("id", destino_query),
+        preco=voo["_preco"],
+        companhia=", ".join(companhias) or "N/A",
+        saida=partida.get("time", ""),
+        chegada=chegada.get("time", ""),
+        duracao=voo.get("_duracao", 0),
+        escalas=max(len(trechos) - 1, 0),
+    )
 
 
 def consultar_voo(origem_query, destino_query, data_ida, data_volta=None):
@@ -273,12 +266,7 @@ def consultar_voo(origem_query, destino_query, data_ida, data_volta=None):
             return None, None
 
         voos_gerais = extrair_voos(res_geral)
-        preco_ref = res_geral.get("price_insights", {}).get("lowest_price")
-        if preco_ref:
-            try:
-                precos_ref_google.append(float(preco_ref))
-            except ValueError:
-                pass
+        adicionar_preco_referencia(res_geral, precos_ref_google)
 
         voos_validos.extend(voos_gerais)
         if voos_gerais:
@@ -296,12 +284,7 @@ def consultar_voo(origem_query, destino_query, data_ida, data_volta=None):
                         continue
 
                     novos_voos = extrair_voos(res_ind)
-                    preco_ind = res_ind.get("price_insights", {}).get("lowest_price")
-                    if preco_ind:
-                        try:
-                            precos_ref_google.append(float(preco_ind))
-                        except ValueError:
-                            pass
+                    adicionar_preco_referencia(res_ind, precos_ref_google)
 
                     if novos_voos:
                         voos_validos.extend(novos_voos)
@@ -322,8 +305,12 @@ def consultar_voo(origem_query, destino_query, data_ida, data_volta=None):
                 vistos.add(chave)
                 voos_unicos.append(voo)
 
-        v_barato = montar_dados_voo(min(voos_unicos, key=lambda x: x["_preco"]), origem_query, destino_query, data_ida)
-        v_rapido = montar_dados_voo(min(voos_unicos, key=lambda x: x["_duracao"]), origem_query, destino_query, data_ida)
+        v_barato = montar_dados_voo(min(voos_unicos, key=lambda x: x["_preco"]), origem_query, destino_query)
+        v_rapido = montar_dados_voo(min(voos_unicos, key=lambda x: x["_duracao"]), origem_query, destino_query)
+
+        for voo in (v_barato, v_rapido):
+            if voo:
+                voo["data_voo"] = data_ida
 
         if v_barato:
             v_barato["quantidade_voos_analisados"] = len(voos_unicos)
@@ -357,21 +344,17 @@ def consultar_promocao_google_flights(origem_query, destino_query, data_ida, dat
                 continue
             try:
                 preco = float(deal["price"])
-                candidatos.append({
-                    "origem": deal.get("departure_airport_code", origem_query),
-                    "destino": dest,
-                    "preco": preco,
-                    "companhia": deal.get("airline", "Google Flights"),
-                    "saida": "",
-                    "chegada": "",
-                    "duracao": deal.get("flight_duration", 0),
-                    "escalas": deal.get("stops", 0),
-                    "data_voo": data_ida,
-                    "fonte": "Google Flights Deals",
-                    "preco_referencia_google": preco,
-                    "quantidade_voos_analisados": 0,
-                    "menores_por_busca": [],
-                })
+                candidatos.append(criar_dados_voo(
+                    origem=deal.get("departure_airport_code", origem_query),
+                    destino=dest,
+                    preco=preco,
+                    companhia=deal.get("airline", "Google Flights"),
+                    duracao=deal.get("flight_duration", 0),
+                    escalas=deal.get("stops", 0),
+                    fonte="Google Flights Deals",
+                    preco_referencia_google=preco,
+                    data_voo=data_ida,
+                ))
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -399,21 +382,19 @@ def consultar_google_travel_explore(origem_query, destino_query, data_ida, data_
             try:
                 preco = float(voo["price"])
                 p, c = voo.get("departure_airport", {}) or {}, voo.get("arrival_airport", {}) or {}
-                candidatos.append({
-                    "origem": p.get("id", origem_query),
-                    "destino": c.get("id", destino_query),
-                    "preco": preco,
-                    "companhia": voo.get("airline", "Google Travel Explore"),
-                    "saida": "",
-                    "chegada": "",
-                    "duracao": voo.get("duration", 0),
-                    "escalas": voo.get("number_of_stops", 0),
-                    "data_voo": data_ida,
-                    "fonte": "Google Travel Explore",
-                    "preco_referencia_google": preco,
-                    "quantidade_voos_analisados": len(voos),
-                    "menores_por_busca": [{"rota": f"Google Travel Explore: {origem_query} → {destino_query}", "preco": preco}],
-                })
+                candidatos.append(criar_dados_voo(
+                    origem=p.get("id", origem_query),
+                    destino=c.get("id", destino_query),
+                    preco=preco,
+                    companhia=voo.get("airline", "Google Travel Explore"),
+                    duracao=voo.get("duration", 0),
+                    escalas=voo.get("number_of_stops", 0),
+                    fonte="Google Travel Explore",
+                    preco_referencia_google=preco,
+                    quantidade_voos_analisados=len(voos),
+                    menores_por_busca=[{"rota": f"Google Travel Explore: {origem_query} → {destino_query}", "preco": preco}],
+                    data_voo=data_ida,
+                ))
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -421,10 +402,279 @@ def consultar_google_travel_explore(origem_query, destino_query, data_ida, data_
     except Exception:
         return None
 
-# ==========================================
-# 4. AUXILIAR DE INTERFACE (CARDS DE VOO)
-# ==========================================
+
+# BANCO DE DADOS DA APLICAÇÃO
+def salvar_historico_db(
+    origem,
+    destino,
+    preco,
+    companhia,
+    duracao=None,
+    escalas=None,
+    data_voo=None
+):
+    session = SessionLocal()
+
+    try:
+        # O st.date_input retorna date; a coluna do banco é DateTime.
+        if data_voo and isinstance(data_voo, date) and not isinstance(data_voo, datetime):
+            data_voo = datetime.combine(data_voo, datetime.min.time())
+
+        # Evita salvar novamente exatamente o mesmo voo monitorado.
+        registro_existente = session.query(HistoricoPreco).filter(
+            HistoricoPreco.origem == origem,
+            HistoricoPreco.destino == destino,
+            HistoricoPreco.preco == preco,
+            HistoricoPreco.companhia == companhia,
+            HistoricoPreco.duracao == duracao,
+            HistoricoPreco.escalas == escalas,
+            HistoricoPreco.data_voo == data_voo,
+        ).first()
+
+        if registro_existente:
+            return False
+
+        registro = HistoricoPreco(
+            origem=origem,
+            destino=destino,
+            preco=preco,
+            companhia=companhia,
+            duracao=duracao,
+            escalas=escalas,
+            data_voo=data_voo,
+        )
+
+        session.add(registro)
+        session.commit()
+        return True
+
+    except Exception as erro:
+        session.rollback()
+        st.error(f"Erro ao salvar no banco de dados: {erro}")
+        return None
+
+    finally:
+        session.close()
+
+
+def carregar_historico_db():
+    session = SessionLocal()
+
+    try:
+        registros = (
+            session.query(HistoricoPreco)
+            .order_by(HistoricoPreco.data_consulta.asc())
+            .all()
+        )
+
+        return pd.DataFrame([
+            {
+                "Data Consulta": r.data_consulta,
+                "Data Voo": r.data_voo,
+                "Origem": r.origem,
+                "Destino": r.destino,
+                "Preco": r.preco,
+                "Companhia": r.companhia,
+                "Duracao": r.duracao,
+                "Escalas": r.escalas,
+            }
+            for r in registros
+        ])
+
+    finally:
+        session.close()
+
+
+def exibir_grafico_historico(
+    origem_filtro=None,
+    destino_filtro=None,
+    data_voo_filtro=None
+):
+    df = carregar_historico_db()
+
+    if df.empty:
+        st.info(
+            "ℹ️ O banco de dados está vazio. "
+            "Busque e salve um voo para começar o monitoramento."
+        )
+        return
+
+    if not origem_filtro or not destino_filtro or not data_voo_filtro:
+        st.info(
+            "ℹ️ Faça uma busca de voo para visualizar "
+            "a evolução de preços daquela viagem."
+        )
+        return
+
+    origem_alvo = str(origem_filtro).upper().strip()
+    destino_alvo = str(destino_filtro).upper().strip()
+    data_alvo = pd.to_datetime(data_voo_filtro).date()
+
+    for coluna_data in ["Data Consulta", "Data Voo"]:
+        df[coluna_data] = pd.to_datetime(df[coluna_data], errors="coerce")
+
+    origem_ok = (
+        df["Origem"].astype(str).str.upper().str.strip()
+        == origem_alvo
+    )
+    destino_ok = (
+        df["Destino"].astype(str).str.upper().str.strip()
+        == destino_alvo
+    )
+    data_ok = df["Data Voo"].dt.date == data_alvo
+
+    df_filtrado = df[
+        origem_ok & destino_ok & data_ok
+    ].copy()
+
+    if df_filtrado.empty:
+        st.info(
+            f"ℹ️ Ainda não há preços salvos para "
+            f"**{origem_alvo} ➔ {destino_alvo}** "
+            f"com viagem em **{data_alvo.strftime('%d/%m/%Y')}**.\n\n"
+            "Salve o voo encontrado para iniciar o histórico."
+        )
+        return
+
+    df_filtrado = (
+        df_filtrado
+        .dropna(subset=["Data Consulta", "Preco"])
+        .sort_values("Data Consulta")
+        .reset_index(drop=True)
+    )
+
+    if df_filtrado.empty:
+        st.info("ℹ️ Não há dados válidos suficientes para gerar o gráfico.")
+        return
+
+    preco_inicial = float(df_filtrado.iloc[0]["Preco"])
+    preco_atual = float(df_filtrado.iloc[-1]["Preco"])
+    menor_preco = float(df_filtrado["Preco"].min())
+
+    variacao_reais = preco_atual - preco_inicial
+    variacao_percentual = (
+        (variacao_reais / preco_inicial) * 100
+        if preco_inicial
+        else 0
+    )
+
+    st.caption(
+        f"📍 **{origem_alvo} ➔ {destino_alvo}** "
+        f"• voo em **{data_alvo.strftime('%d/%m/%Y')}**"
+    )
+
+    metrica1, metrica2, metrica3 = st.columns(3)
+
+    with metrica1:
+        st.metric(
+            "Preço mais recente",
+            formatar_preco(preco_atual)
+        )
+
+    with metrica2:
+        st.metric(
+            "Menor preço registrado",
+            formatar_preco(menor_preco)
+        )
+
+    with metrica3:
+        st.metric(
+            "Variação desde o 1º registro",
+            f"R$ {variacao_reais:+,.0f}".replace(",", "."),
+            delta=f"{variacao_percentual:+.1f}%"
+        )
+
+    df_filtrado["Rotulo Consulta"] = (
+        df_filtrado["Data Consulta"]
+        .dt.strftime("%d/%m\n%H:%M")
+    )
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+
+    ax.plot(
+        df_filtrado["Rotulo Consulta"],
+        df_filtrado["Preco"],
+        marker="o",
+        linewidth=2.2,
+        markersize=6
+    )
+
+    indice_menor = df_filtrado["Preco"].idxmin()
+
+    ax.scatter(
+        df_filtrado.loc[indice_menor, "Rotulo Consulta"],
+        df_filtrado.loc[indice_menor, "Preco"],
+        s=90,
+        zorder=3,
+        label="Menor preço"
+    )
+
+    ax.set_title(
+        "Evolução do preço da passagem",
+        fontsize=12,
+        fontweight="bold",
+        pad=12
+    )
+    ax.set_xlabel("Data e hora da consulta", fontsize=10)
+    ax.set_ylabel("Preço (R$)", fontsize=10)
+    ax.grid(True, linestyle="--", alpha=0.35)
+
+    if len(df_filtrado) > 1:
+        ax.legend()
+
+    plt.xticks(rotation=45, ha="right", fontsize=8)
+    plt.yticks(fontsize=9)
+    plt.tight_layout()
+
+    st.pyplot(fig)
+    plt.close(fig)
+
+    if len(df_filtrado) == 1:
+        st.caption(
+            "💡 Há apenas 1 preço salvo para esta viagem. "
+            "Quando novos preços forem registrados, "
+            "a linha de evolução será formada automaticamente."
+        )
+
+    tabela = df_filtrado.copy()
+    tabela["Data Consulta"] = (
+        tabela["Data Consulta"]
+        .dt.strftime("%d/%m/%Y %H:%M")
+    )
+    tabela["Data Voo"] = (
+        tabela["Data Voo"]
+        .dt.strftime("%d/%m/%Y")
+    )
+    tabela["Preco"] = tabela["Preco"].apply(formatar_preco)
+    tabela["Duracao"] = tabela["Duracao"].apply(
+        formatar_duracao
+    )
+    tabela["Escalas"] = tabela["Escalas"].apply(formatar_escalas)
+
+    colunas_tabela = [
+        "Data Consulta",
+        "Data Voo",
+        "Origem",
+        "Destino",
+        "Preco",
+        "Companhia",
+        "Duracao",
+        "Escalas",
+    ]
+
+    with st.expander("📄 Ver histórico detalhado desta viagem"):
+        st.dataframe(
+            tabela[colunas_tabela].sort_values(
+                by="Data Consulta",
+                ascending=False
+            ),
+            use_container_width=True,
+            hide_index=True
+        )
+
+
 def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
+    """Auxiliar para renderizar os cards de resultados na interface."""
     if not voo:
         return
 
@@ -433,7 +683,7 @@ def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
     else:
         st.info(f"⚡ **{titulo}**")
 
-    preco_fmt = f"R$ {voo['preco']:,.0f}".replace(",", ".")
+    preco_fmt = formatar_preco(voo["preco"])
     st.metric(f"Preço ({voo['companhia']})", preco_fmt)
 
     if voo.get("fonte") == "Google Flights Deals":
@@ -447,7 +697,7 @@ def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
     if voo["chegada"]:
         st.write(f"🕒 **Chegada:** {voo['chegada']}")
 
-    escalas_txt = "Sem escalas" if voo["escalas"] == 0 else f"{voo['escalas']} escala(s)"
+    escalas_txt = formatar_escalas(voo.get("escalas"))
     st.caption(f"⏱️ Duração: {formatar_duracao(voo['duracao'])} • {escalas_txt}")
 
     if "quantidade_voos_analisados" in voo:
@@ -455,29 +705,33 @@ def exibir_card_voo(voo, titulo, cor_badge, chave_btn):
             st.write(f"Voos analisados: **{voo.get('quantidade_voos_analisados', 0)}**")
             st.write(f"Menor preço com voo detalhado: **{preco_fmt}**")
             preco_g = voo.get("preco_referencia_google")
-            st.write(f"Menor preço indicado pelo Google: **{f'R$ {preco_g:,.0f}'.replace(',', '.') if preco_g else 'não informado pela API'}**")
+            preco_google_fmt = formatar_preco(preco_g) if preco_g is not None else "não informado pela API"
+            st.write(f"Menor preço indicado pelo Google: **{preco_google_fmt}**")
 
             if voo.get("menores_por_busca"):
                 st.write("**Menor preço por pesquisa:**")
                 for item in voo["menores_por_busca"]:
-                    st.write(f"• {item['rota']}: **R$ {item['preco']:,.0f}**".replace(",", "."))
+                    preco_rota = formatar_preco(item["preco"])
+                    st.write(f"• {item['rota']}: **{preco_rota}**")
 
     if st.button(f"💾 Salvar {titulo.split()[-1]}", key=chave_btn):
-        salvar_historico_db(
+        resultado_salvamento = salvar_historico_db(
             origem=voo["origem"],
             destino=voo["destino"],
             preco=voo["preco"],
             companhia=voo["companhia"],
             duracao=voo.get("duracao"),
             escalas=voo.get("escalas"),
-            data_voo=voo.get("data_voo")
+            data_voo=voo.get("data_voo"),
         )
-        st.success("✅ Voo salvo no Banco de Dados!")
-        st.rerun()
+        if resultado_salvamento:
+            st.success("✅ Voo salvo no Banco de Dados!")
+            st.rerun()
+        elif resultado_salvamento is False:
+            st.info("ℹ️ Este voo já está salvo no histórico.")
 
-# ==========================================
-# 5. INTERFACE DO USUÁRIO (LAYOUT PRINCIPAL)
-# ==========================================
+
+# INTERFACE DO USUÁRIO
 col_esquerda, col_direita = st.columns([1.1, 0.9])
 
 with col_esquerda:
@@ -526,7 +780,7 @@ with col_esquerda:
             else:
                 st.warning("⚠️ Nenhum voo encontrado para a rota e data informadas.")
 
-    # Exibição dos resultados da busca
+    # Exibição dos resultados
     v_barato = st.session_state.get("voo_barato")
     v_rapido = st.session_state.get("voo_rapido")
 
@@ -539,50 +793,15 @@ with col_esquerda:
             exibir_card_voo(v_rapido, "Voo Mais Rápido", "info", "btn_salvar_rapido")
 
 with col_direita:
-    st.subheader("📊 Painel de Histórico")
-    
-    # Carrega os dados mais recentes do SQLite
-    df_hist = carregar_historico_db()
+    st.subheader("📈 Histórico de Preços Monitorados")
 
-    tab_grafico, tab_tabela = st.tabs(["📈 Evolução de Preços", "📋 Tabela e Gerenciamento"])
+    v_ref = (
+        st.session_state.get("voo_barato")
+        or st.session_state.get("voo_rapido")
+    )
 
-    with tab_grafico:
-        renderizar_grafico_evolucao(df_hist)
-
-    with tab_tabela:
-        if not df_hist.empty:
-            st.dataframe(df_hist, use_container_width=True, hide_index=True)
-            
-            st.write("---")
-            col_down, col_del = st.columns([1, 1])
-            
-            with col_down:
-                st.download_button(
-                    label="📥 Baixar Histórico (CSV)",
-                    data=df_hist.to_csv(index=False).encode("utf-8"),
-                    file_name=f"historico_pousaaqui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            with col_del:
-                # Exclusão individual por ID
-                id_para_deletar = st.selectbox(
-                    "Selecione o ID para excluir:",
-                    options=df_hist["id"].tolist(),
-                    key="select_del_id"
-                )
-                if st.button("🗑️ Excluir Item Selecionado", type="secondary", use_container_width=True):
-                    deletar_registro_db(id_para_deletar)
-                    st.success(f"✅ Registro #{id_para_deletar} excluído!")
-                    st.rerun()
-
-            # Opção de reset completo
-            with st.expander("⚠️ Zona de Perigo"):
-                st.caption("A ação abaixo removerá todos os registros salvos permanentemente.")
-                if st.button("🚨 Apagar TODO o Histórico", type="primary"):
-                    limpar_todo_historico_db()
-                    st.success("✅ Todo o histórico foi zerado!")
-                    st.rerun()
-        else:
-            st.info("Nenhum registro no banco de dados até o momento.")
+    exibir_grafico_historico(
+        v_ref["origem"] if v_ref else None,
+        v_ref["destino"] if v_ref else None,
+        v_ref.get("data_voo") if v_ref else None,
+    )
